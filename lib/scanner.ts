@@ -1,4 +1,4 @@
-import type { Instrument, ScannerMatch, Timeframe } from "./types";
+import type { Candle, Instrument, ScannerMatch, Timeframe } from "./types";
 import { getIntradayCandles, getPreviousTradingDailyCandle } from "./upstox";
 
 function sma(values: number[]): number {
@@ -37,18 +37,22 @@ async function fetchPreviousTradingCandle(instrumentKey: string, now: Date) {
   return getPreviousTradingDailyCandle(instrumentKey, currentDate, fromDate);
 }
 
+function normalizeCandles(candles: Candle[]): Candle[] {
+  // Upstox V3 returns candles newest-first. Scanner calculations need
+  // chronological order so the final candle is the current/latest candle and
+  // the preceding 20 candles are the correct SMA(20) history.
+  return [...candles].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
 export async function scanInstrument(
   instrument: Instrument,
   timeframe: Timeframe,
   multiplier: number,
   priceThreshold: number,
 ): Promise<ScannerMatch[]> {
-  // IMPORTANT: do not fetch the previous-day candle for every stock upfront.
-  // First use the single intraday request to eliminate stocks that fail the
-  // cheap daily-high / volume conditions. Only likely matches need the second
-  // historical request for previous-day High/Low.
-  const candles = await getIntradayCandles(instrument.instrument_key, timeframe);
-  if (!candles.length) return [];
+  const rawCandles = await getIntradayCandles(instrument.instrument_key, timeframe);
+  const candles = normalizeCandles(rawCandles);
+  if (candles.length < 21) return [];
 
   const dailyHigh = Math.max(...candles.map((c) => c.high));
   if (!(dailyHigh > priceThreshold)) return [];
