@@ -5,7 +5,7 @@ import type { ScannerMatch } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 55;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -17,16 +17,24 @@ export async function GET(request: NextRequest) {
     const { timeframe, multiplier, priceThreshold } = validateScannerInputs(request.nextUrl.searchParams);
     const universe = await getConfiguredUniverse();
     if (!universe.length) {
-      return NextResponse.json({ ok: false, error: "No NSE symbols found in instrument master / NSE_SYMBOLS." }, { status: 500 });
+      return NextResponse.json({ ok: false, error: "No NSE symbols found in instrument master." }, { status: 500 });
     }
 
-    const batchSize = Math.max(1, Math.min(20, Number(process.env.SCAN_BATCH_SIZE ?? 8)));
-    const delayMs = Math.max(0, Number(process.env.SCAN_BATCH_DELAY_MS ?? 250));
+    // Vercel serverless functions have a finite execution window. Scan in small
+    // chunks so the browser can cover the complete Upstox NSE universe without
+    // one request timing out.
+    const offset = Math.max(0, Number(request.nextUrl.searchParams.get("offset") ?? 0));
+    const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 100);
+    const limit = Math.max(25, Math.min(125, Number.isFinite(requestedLimit) ? requestedLimit : 100));
+    const selected = universe.slice(offset, offset + limit);
+
+    const batchSize = Math.max(1, Math.min(12, Number(process.env.SCAN_BATCH_SIZE ?? 12)));
+    const delayMs = Math.max(0, Number(process.env.SCAN_BATCH_DELAY_MS ?? 50));
     const results: ScannerMatch[] = [];
     let scanned = 0;
 
-    for (let i = 0; i < universe.length; i += batchSize) {
-      const batch = universe.slice(i, i + batchSize);
+    for (let i = 0; i < selected.length; i += batchSize) {
+      const batch = selected.slice(i, i + batchSize);
       const settled = await Promise.allSettled(
         batch.map((instrument) => scanInstrument(instrument, timeframe, multiplier, priceThreshold)),
       );
@@ -37,7 +45,7 @@ export async function GET(request: NextRequest) {
         else warnings.push(`${batch[index].trading_symbol}: ${item.reason instanceof Error ? item.reason.message : "scan failed"}`);
       });
 
-      if (i + batchSize < universe.length && delayMs > 0) await sleep(delayMs);
+      if (i + batchSize < selected.length && delayMs > 0) await sleep(delayMs);
     }
 
     results.sort((a, b) => b.volumeMultiple - a.volumeMultiple);
@@ -46,6 +54,10 @@ export async function GET(request: NextRequest) {
       ok: true,
       scanned,
       matched: results.length,
+      totalUniverse: universe.length,
+      offset,
+      limit: selected.length,
+      hasMore: offset + selected.length < universe.length,
       timeframe,
       volumeMultiplier: multiplier,
       priceThreshold,
