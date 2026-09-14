@@ -65,17 +65,40 @@ async function loadInstrumentFile(): Promise<Instrument[]> {
   return JSON.parse(gunzipSync(Buffer.from(arrayBuffer)).toString("utf8")) as Instrument[];
 }
 
-export async function getNseEquities(): Promise<Instrument[]> {
+export async function getNseFnoStocks(): Promise<Instrument[]> {
   const ttl = Number(process.env.INSTRUMENT_CACHE_TTL_SECONDS ?? 86400) * 1000;
   if (instrumentCache && Date.now() < instrumentCache.expiresAt) return instrumentCache.instruments;
+
   const all = await loadInstrumentFile();
-  const equities = all.filter((item) => item.segment === "NSE_EQ" && ["EQ", "BE"].includes(item.instrument_type));
+
+  // Build the stock universe from NSE_FO contracts. We scan the underlying
+  // NSE_EQ shares, not individual futures/options contracts. This gives the
+  // scanner only stocks that currently have an NSE F&O contract, while
+  // excluding index F&O such as NIFTY/BANKNIFTY.
+  const fnoUnderlyingKeys = new Set(
+    all
+      .filter((item) =>
+        item.segment === "NSE_FO" &&
+        ["FUT", "CE", "PE"].includes(item.instrument_type) &&
+        item.underlying_type === "EQUITY" &&
+        Boolean(item.underlying_key),
+      )
+      .map((item) => item.underlying_key as string),
+  );
+
+  const equities = all.filter(
+    (item) =>
+      item.segment === "NSE_EQ" &&
+      ["EQ", "BE"].includes(item.instrument_type) &&
+      fnoUnderlyingKeys.has(item.instrument_key),
+  );
+
   instrumentCache = { expiresAt: Date.now() + ttl, instruments: equities };
   return equities;
 }
 
 export async function getConfiguredUniverse(): Promise<Instrument[]> {
-  return getNseEquities();
+  return getNseFnoStocks();
 }
 
 interface CandleResponse { status: string; data?: { candles?: unknown[][] } }
