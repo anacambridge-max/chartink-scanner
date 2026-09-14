@@ -125,9 +125,9 @@ export default function Home() {
       <div className="mx-auto max-w-[1600px]">
         <header className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-400">UPSTOX · REAL-TIME MARKET SCANNER</div>
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Chartink-Style Breakout Scanner</h1>
-            <p className="mt-1 text-sm text-slate-400">Volume SMA(20) × multiplier + previous-day High/Low breakout + Daily High threshold</p>
+            <div className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-400">UPSTOX · REAL-TIME F&O STOCK SCANNER</div>
+            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Chartink-Style F&O Breakout Scanner</h1>
+            <p className="mt-1 text-sm text-slate-400">Only NSE F&O stocks are scanned · Volume SMA(20) × multiplier + previous-day High/Low breakout + Daily High threshold</p>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-400">
             <span className={`h-2.5 w-2.5 rounded-full ${loading ? "animate-pulse bg-amber-400" : error ? "bg-red-500" : "bg-emerald-400"}`} />
@@ -173,7 +173,7 @@ export default function Home() {
 
         <section className="mb-4 grid gap-3 sm:grid-cols-4">
           {[
-            ["Stocks scanned", data?.totalUniverse ? `${data.scanned}/${data.totalUniverse}` : data?.scanned ?? "—"],
+            ["F&O stocks scanned", data?.totalUniverse ? `${data.scanned}/${data.totalUniverse}` : data?.scanned ?? "—"],
             ["Bullish", bullish],
             ["Bearish", bearish],
             ["Scan time", data ? `${(data.elapsedMs / 1000).toFixed(1)}s` : "—"],
@@ -182,7 +182,7 @@ export default function Home() {
 
         <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0b1220] shadow-2xl shadow-black/10">
           <div className="flex flex-col gap-1 border-b border-slate-800 px-4 py-3 md:flex-row md:items-center md:justify-between">
-            <div className="text-sm font-semibold">Matched Stocks <span className="text-slate-500">({data?.matched ?? 0})</span></div>
+            <div className="text-sm font-semibold">Matched F&O Stocks <span className="text-slate-500">({data?.matched ?? 0})</span></div>
             <div className="text-xs text-slate-500">Last completed: {data ? formatTime(data.completedAt) : "—"} IST</div>
           </div>
           <div className="overflow-x-auto">
@@ -191,7 +191,7 @@ export default function Home() {
                 <tr>{["Symbol", "LTP", "Volume Multiple", "Direction", "Prev Day High", "Prev Day Low", "Daily High", "Current Volume", "Trigger"].map((x) => <th key={x} className="px-4 py-3 font-semibold">{x}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-800/80">
-                {!loading && !grouped.length && <tr><td colSpan={9} className="px-4 py-14 text-center text-slate-500">No stocks matched the current scanner conditions.</td></tr>}
+                {!loading && !grouped.length && <tr><td colSpan={9} className="px-4 py-14 text-center text-slate-500">No F&O stocks matched the current scanner conditions.</td></tr>}
                 {grouped.map((row, index) => (
                   <tr key={`${row.instrumentKey}-${row.direction}-${index}`} className={row.direction === "BULLISH BREAKOUT" ? "bg-emerald-950/10 hover:bg-emerald-950/20" : "bg-red-950/10 hover:bg-red-950/20"}>
                     <td className="px-4 py-3 font-bold">{row.symbol}</td>
@@ -214,7 +214,7 @@ export default function Home() {
 
         <footer className="mt-5 flex flex-col gap-1 text-xs text-slate-600 md:flex-row md:justify-between">
           <span>Data source: Upstox API v3</span>
-          <span>Configured universe: NSE equity instrument master</span>
+          <span>Universe: NSE F&O stock underlyings only</span>
         </footer>
       </div>
     </main>
