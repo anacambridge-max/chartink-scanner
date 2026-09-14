@@ -21,6 +21,7 @@ export interface Instrument {
   trading_symbol: string;
   underlying_symbol?: string;
   underlying_key?: string;
+  underlying_type?: string;
 }
 
 export interface ScannerMatch {
