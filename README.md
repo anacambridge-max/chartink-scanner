@@ -22,6 +22,20 @@ A matching candle creates `BULLISH BREAKOUT` and/or `BEARISH BREAKDOWN`. If both
 
 The dashboard defaults to 1 minute, 2× volume, `Daily High > 50`, and 30-second refresh.
 
+## Upstox authentication
+
+This project is designed to use the **Upstox Analytics Token** shown under **Upstox → Apps → Analytics**.
+
+Only one environment variable is required:
+
+```env
+UPSTOX_ACCESS_TOKEN=your_analytics_token
+```
+
+The Analytics Token is a long-lived, read-only token intended for market-data APIs. You do **not** need to add `UPSTOX_API_KEY`, `UPSTOX_API_SECRET`, or a daily OAuth access-token flow for this scanner.
+
+**Never commit the token to GitHub or expose it as a `NEXT_PUBLIC_*` variable.**
+
 ## Upstox API details
 
 The project uses Upstox API v3 intraday candles at:
@@ -30,34 +44,11 @@ The project uses Upstox API v3 intraday candles at:
 GET /v3/historical-candle/intraday/:instrument_key/minutes/:interval
 ```
 
-Upstox V3 supports custom minute intervals, including 1, 3 and 5 minutes. The app also uses V3 daily historical candles to determine the previous trading session's High/Low.
+The scanner uses 1, 3 and 5 minute intervals and V3 daily historical candles for the previous trading session's High/Low.
 
-The instrument master is downloaded from Upstox's NSE BOD JSON feed and filtered to `NSE_EQ` instruments. `instrument_key` is used throughout the API client.
+The NSE instrument master is downloaded from Upstox's NSE BOD JSON feed and filtered to `NSE_EQ` instruments. `instrument_key` is used throughout the API client.
 
-## 1. Create an Upstox developer application
-
-Create an app in the Upstox Developer Console and copy:
-
-- API Key
-- API Secret
-- Redirect URI
-
-Keep the API secret server-side. Never expose it as `NEXT_PUBLIC_*`.
-
-## 2. Generate the daily access token
-
-Upstox access tokens have a defined expiry and are not long-lived. Generate/approve a fresh access token for the trading day and put it into `UPSTOX_ACCESS_TOKEN`. The token expiry is shown by Upstox and can expire at 3:30 AM the following day depending on when the request is initiated.
-
-For this scanner, the simplest production workflow is:
-
-1. Generate/approve the Upstox access token using your registered OAuth redirect URI.
-2. Copy the access token.
-3. Update the Vercel environment variable `UPSTOX_ACCESS_TOKEN`.
-4. Redeploy or refresh the deployment so the new environment variable is active.
-
-Do not commit the token to GitHub.
-
-## 3. Local setup
+## 1. Local setup
 
 ```bash
 git clone https://github.com/anacambridge-max/chartink-scanner.git
@@ -66,11 +57,9 @@ npm install
 cp .env.example .env.local
 ```
 
-Set:
+Put your Analytics Token in `.env.local`:
 
 ```env
-UPSTOX_API_KEY=...
-UPSTOX_API_SECRET=...
 UPSTOX_ACCESS_TOKEN=...
 ```
 
@@ -81,14 +70,6 @@ Optional universe control:
 NSE_SYMBOLS=RELIANCE,INFY,TCS,SBIN
 ```
 
-Optional performance tuning:
-
-```env
-SCAN_BATCH_SIZE=8
-SCAN_BATCH_DELAY_MS=250
-INSTRUMENT_CACHE_TTL_SECONDS=86400
-```
-
 Run:
 
 ```bash
@@ -97,14 +78,14 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-## 4. How the scanner works
+## 2. How the scanner works
 
 Every scan request sends the selected settings to `/api/scan`.
 
 The server downloads/caches the NSE instrument master, builds the configured universe, then scans symbols in rate-limited parallel batches. Each symbol fetches:
 
 - current-day 1/3/5-minute candles
-- a small daily historical window from which the latest candle before today is selected as the previous trading day
+- a daily historical window from which the latest candle before today is selected as the previous trading day
 
 For the most recent intraday candle:
 
@@ -116,7 +97,7 @@ For the most recent intraday candle:
 
 Failed individual symbols are recorded as warnings rather than aborting the whole scan.
 
-## 5. GitHub
+## 3. GitHub
 
 ```bash
 git add .
@@ -124,29 +105,27 @@ git commit -m "build real-time Upstox scanner"
 git push origin main
 ```
 
-## 6. Vercel deployment
+## 4. Vercel deployment
 
 Import this GitHub repository into Vercel.
 
-Add these Environment Variables for Production (and Preview if desired):
+Add **only this required Environment Variable**:
 
 ```text
-UPSTOX_API_KEY
-UPSTOX_API_SECRET
 UPSTOX_ACCESS_TOKEN
-NSE_SYMBOLS
-SCAN_BATCH_SIZE
-SCAN_BATCH_DELAY_MS
-INSTRUMENT_CACHE_TTL_SECONDS
 ```
+
+Paste the full Analytics Token from Upstox Apps → Analytics as its value.
+
+`NSE_SYMBOLS` is optional. Leave it unset/empty to scan the NSE universe from the Upstox instrument master.
 
 Then deploy.
 
 ### Serverless runtime note
 
-The scan route runs in the Node.js runtime and has a maximum duration configured in the route. For a very large full-NSE universe, Vercel execution time and Upstox rate limits can make one request expensive. In that case, start with an F&O symbol list or a curated liquid NSE universe and tune `SCAN_BATCH_SIZE` / `SCAN_BATCH_DELAY_MS`.
+The scan route runs in the Node.js runtime and uses rate-limited batches. For a very large full-NSE universe, Vercel execution time and Upstox rate limits can make one request expensive. Start with a liquid/F&O symbol list if necessary; the scanner logic itself remains unchanged.
 
-## 7. API example
+## 5. API example
 
 ```text
 GET /api/scan?timeframe=1&multiplier=2&priceThreshold=50
@@ -175,8 +154,8 @@ Each match contains symbol, LTP, volume multiple, direction, previous-day High/L
 Never commit:
 
 - `.env.local`
-- Upstox access tokens
+- Upstox Analytics Tokens
 - API secrets
 - client-side copies of credentials
 
-The browser only calls the app's own `/api/scan` endpoint; Upstox credentials stay on the server.
+The browser only calls the app's own `/api/scan` endpoint; the Upstox token stays on the server.
