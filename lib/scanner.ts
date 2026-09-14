@@ -37,23 +37,18 @@ async function fetchPreviousTradingCandle(instrumentKey: string, now: Date) {
   return getPreviousTradingDailyCandle(instrumentKey, currentDate, fromDate);
 }
 
-async function fetchSymbolData(instrument: Instrument, timeframe: Timeframe) {
-  const now = new Date();
-  const [candles, previous] = await Promise.all([
-    getIntradayCandles(instrument.instrument_key, timeframe),
-    fetchPreviousTradingCandle(instrument.instrument_key, now),
-  ]);
-  return { candles, previous };
-}
-
 export async function scanInstrument(
   instrument: Instrument,
   timeframe: Timeframe,
   multiplier: number,
   priceThreshold: number,
 ): Promise<ScannerMatch[]> {
-  const { candles, previous } = await fetchSymbolData(instrument, timeframe);
-  if (!candles.length || !previous) return [];
+  // IMPORTANT: do not fetch the previous-day candle for every stock upfront.
+  // First use the single intraday request to eliminate stocks that fail the
+  // cheap daily-high / volume conditions. Only likely matches need the second
+  // historical request for previous-day High/Low.
+  const candles = await getIntradayCandles(instrument.instrument_key, timeframe);
+  if (!candles.length) return [];
 
   const dailyHigh = Math.max(...candles.map((c) => c.high));
   if (!(dailyHigh > priceThreshold)) return [];
@@ -66,6 +61,10 @@ export async function scanInstrument(
 
   const volumeMultiple = current.volume / sma20Volume;
   if (!(current.volume > sma20Volume * multiplier)) return [];
+
+  // Only now make the relatively expensive historical request.
+  const previous = await fetchPreviousTradingCandle(instrument.instrument_key, new Date());
+  if (!previous) return [];
 
   const base = {
     symbol: instrument.trading_symbol,
