@@ -4,6 +4,27 @@ const API_BASE = "https://api.upstox.com";
 const INSTRUMENTS_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz";
 
 let instrumentCache: { expiresAt: number; instruments: Instrument[] } | null = null;
+const previousDayCache = new Map<string, { expiresAt: number; candle: Candle | null }>();
+
+// Upstox currently allows 500 standard API requests/minute. Keep the shared
+// request queue safely below that ceiling instead of firing hundreds of
+// historical requests concurrently and getting Cloudflare 429 responses.
+const API_MIN_INTERVAL_MS = 125;
+let apiQueue: Promise<unknown> = Promise.resolve();
+let nextApiSlot = 0;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function scheduleApiRequest<T>(fn: () => Promise<T>): Promise<T> {
+  const run = apiQueue.then(async () => {
+    const wait = Math.max(0, nextApiSlot - Date.now());
+    if (wait > 0) await sleep(wait);
+    nextApiSlot = Date.now() + API_MIN_INTERVAL_MS;
+    return fn();
+  });
+  apiQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 function token(): string {
   const value = process.env.UPSTOX_ACCESS_TOKEN;
@@ -12,15 +33,28 @@ function token(): string {
 }
 
 async function upstoxGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${token()}` },
-    cache: "no-store",
+  return scheduleApiRequest(async () => {
+    let lastError = "";
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const response = await fetch(`${API_BASE}${path}`, {
+        headers: { Accept: "application/json", Authorization: `Bearer ${token()}` },
+        cache: "no-store",
+      });
+
+      if (response.ok) return response.json() as Promise<T>;
+
+      const body = await response.text().catch(() => "");
+      lastError = `Upstox ${response.status}: ${body.slice(0, 300)}`;
+
+      if (response.status !== 429 || attempt === 3) throw new Error(lastError);
+
+      // Back off when the upstream edge still says rate-limited.
+      await sleep(1500 * (attempt + 1));
+    }
+
+    throw new Error(lastError || "Upstox request failed");
   });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`Upstox ${response.status}: ${body.slice(0, 300)}`);
-  }
-  return response.json() as Promise<T>;
 }
 
 async function loadInstrumentFile(): Promise<Instrument[]> {
@@ -41,11 +75,7 @@ export async function getNseEquities(): Promise<Instrument[]> {
 }
 
 export async function getConfiguredUniverse(): Promise<Instrument[]> {
-  const all = await getNseEquities();
-  const configured = process.env.NSE_SYMBOLS?.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  if (!configured?.length) return all;
-  const map = new Map(all.map((item) => [item.trading_symbol.toUpperCase(), item]));
-  return configured.map((symbol) => map.get(symbol)).filter((x): x is Instrument => Boolean(x));
+  return getNseEquities();
 }
 
 interface CandleResponse { status: string; data?: { candles?: unknown[][] } }
@@ -64,10 +94,18 @@ export async function getIntradayCandles(instrumentKey: string, minutes: 1 | 3 |
 }
 
 export async function getPreviousTradingDailyCandle(instrumentKey: string, toDate: string, fromDate: string): Promise<Candle | null> {
+  const cacheKey = `${instrumentKey}|${toDate}`;
+  const cached = previousDayCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.candle;
+
   const encoded = encodeURIComponent(instrumentKey);
   const payload = await upstoxGet<CandleResponse>(`/v3/historical-candle/${encoded}/days/1/${toDate}/${fromDate}`);
-  const candles = parseCandles(payload)
+  const candle = parseCandles(payload)
     .filter((c) => c.timestamp.slice(0, 10) < toDate)
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  return candles.at(0) ?? null;
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0] ?? null;
+
+  // Previous-day data is immutable for the current trading day, so keep it for
+  // the rest of the day and avoid making the same API call on every refresh.
+  previousDayCache.set(cacheKey, { expiresAt: Date.now() + 12 * 60 * 60 * 1000, candle });
+  return candle;
 }
