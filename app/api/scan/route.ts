@@ -20,15 +20,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ ok: false, error: "No NSE symbols found in instrument master." }, { status: 500 });
     }
 
-    // Vercel serverless functions have a finite execution window. Scan in small
-    // chunks so the browser can cover the complete Upstox NSE universe without
-    // one request timing out.
+    // Keep each serverless request comfortably below the execution limit. The
+    // browser automatically continues with the next chunk until all NSE stocks
+    // have been scanned.
     const offset = Math.max(0, Number(request.nextUrl.searchParams.get("offset") ?? 0));
-    const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 100);
-    const limit = Math.max(25, Math.min(125, Number.isFinite(requestedLimit) ? requestedLimit : 100));
+    const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 75);
+    const limit = Math.max(25, Math.min(75, Number.isFinite(requestedLimit) ? requestedLimit : 75));
     const selected = universe.slice(offset, offset + limit);
 
-    const batchSize = Math.max(1, Math.min(12, Number(process.env.SCAN_BATCH_SIZE ?? 12)));
+    const batchSize = Math.max(1, Math.min(8, Number(process.env.SCAN_BATCH_SIZE ?? 8)));
     const delayMs = Math.max(0, Number(process.env.SCAN_BATCH_DELAY_MS ?? 50));
     const results: ScannerMatch[] = [];
     let scanned = 0;
