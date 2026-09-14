@@ -1,4 +1,4 @@
-import type { Candle, Direction, Instrument, ScannerMatch, Timeframe } from "./types";
+import type { Instrument, ScannerMatch, Timeframe } from "./types";
 import { getIntradayCandles, getPreviousTradingDailyCandle } from "./upstox";
 
 function sma(values: number[]): number {
@@ -21,27 +21,29 @@ export function marketHoursLikelyOpen(now = new Date()): boolean {
   return !["Sat", "Sun"].includes(day ?? "") && total >= 555 && total <= 930;
 }
 
-function previousBusinessDateIso(date = new Date()): string {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  do d.setDate(d.getDate() - 1); while ([0, 6].includes(d.getDay()));
-  return d.toISOString().slice(0, 10);
+function isoIndia(date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
 }
 
-function currentDateIso(date = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
+function previousCalendarDateIso(date = new Date(), days = 1): string {
+  const d = new Date(date);
+  d.setUTCDate(d.getUTCDate() - days);
+  return isoIndia(d);
+}
+
+async function fetchPreviousTradingCandle(instrumentKey: string, now: Date) {
+  const currentDate = isoIndia(now);
+  const fromDate = previousCalendarDateIso(now, 10);
+  return getPreviousTradingDailyCandle(instrumentKey, currentDate, fromDate);
 }
 
 async function fetchSymbolData(instrument: Instrument, timeframe: Timeframe) {
   const now = new Date();
-  const currentDate = currentDateIso(now);
-  const previousDate = previousBusinessDateIso(now);
   const [candles, previous] = await Promise.all([
     getIntradayCandles(instrument.instrument_key, timeframe),
-    getPreviousTradingDailyCandle(instrument.instrument_key, currentDate, previousDate),
+    fetchPreviousTradingCandle(instrument.instrument_key, now),
   ]);
-
-  return { candles, previous, currentDate };
+  return { candles, previous };
 }
 
 export async function scanInstrument(
@@ -53,14 +55,9 @@ export async function scanInstrument(
   const { candles, previous } = await fetchSymbolData(instrument, timeframe);
   if (!candles.length || !previous) return [];
 
-  const previousDayHigh = previous.high;
-  const previousDayLow = previous.low;
-  // Daily High > threshold means the highest price of today's daily candle.
-  // Intraday candles are sufficient to derive today's running daily high.
   const dailyHigh = Math.max(...candles.map((c) => c.high));
   if (!(dailyHigh > priceThreshold)) return [];
 
-  // Use the most recent available candle as Chartink-style "current" candle.
   const current = candles.at(-1)!;
   const volumeHistory = candles.slice(-21, -1).map((c) => c.volume);
   if (volumeHistory.length < 20) return [];
@@ -70,7 +67,6 @@ export async function scanInstrument(
   const volumeMultiple = current.volume / sma20Volume;
   if (!(current.volume > sma20Volume * multiplier)) return [];
 
-  const matches: ScannerMatch[] = [];
   const base = {
     symbol: instrument.trading_symbol,
     instrumentKey: instrument.instrument_key,
@@ -78,15 +74,16 @@ export async function scanInstrument(
     volumeMultiple,
     currentVolume: current.volume,
     sma20Volume,
-    prevDayHigh: previousDayHigh,
-    prevDayLow: previousDayLow,
+    prevDayHigh: previous.high,
+    prevDayLow: previous.low,
     dailyHigh,
     triggerTime: current.timestamp,
     timeframe,
   };
 
-  if (current.high > previousDayHigh) matches.push({ ...base, direction: "BULLISH BREAKOUT" });
-  if (current.low < previousDayLow) matches.push({ ...base, direction: "BEARISH BREAKDOWN" });
+  const matches: ScannerMatch[] = [];
+  if (current.high > previous.high) matches.push({ ...base, direction: "BULLISH BREAKOUT" });
+  if (current.low < previous.low) matches.push({ ...base, direction: "BEARISH BREAKDOWN" });
   return matches;
 }
 
