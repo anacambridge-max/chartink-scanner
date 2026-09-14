@@ -1,5 +1,5 @@
 import type { Candle, Instrument, ScannerMatch, Timeframe } from "./types";
-import { getIntradayCandles, getPreviousTradingDailyCandle } from "./upstox";
+import { getIntradayCandles } from "./upstox";
 
 function sma(values: number[]): number {
   if (!values.length) return 0;
@@ -21,26 +21,7 @@ export function marketHoursLikelyOpen(now = new Date()): boolean {
   return !["Sat", "Sun"].includes(day ?? "") && total >= 555 && total <= 930;
 }
 
-function isoIndia(date = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
-}
-
-function previousCalendarDateIso(date = new Date(), days = 1): string {
-  const d = new Date(date);
-  d.setUTCDate(d.getUTCDate() - days);
-  return isoIndia(d);
-}
-
-async function fetchPreviousTradingCandle(instrumentKey: string, now: Date) {
-  const currentDate = isoIndia(now);
-  const fromDate = previousCalendarDateIso(now, 10);
-  return getPreviousTradingDailyCandle(instrumentKey, currentDate, fromDate);
-}
-
 function normalizeCandles(candles: Candle[]): Candle[] {
-  // Upstox V3 returns candles newest-first. Scanner calculations need
-  // chronological order so the final candle is the current/latest candle and
-  // the preceding 20 candles are the correct SMA(20) history.
   return [...candles].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
@@ -49,10 +30,11 @@ export async function scanInstrument(
   timeframe: Timeframe,
   multiplier: number,
   priceThreshold: number,
+  previous: Candle | null,
 ): Promise<ScannerMatch[]> {
   const rawCandles = await getIntradayCandles(instrument.instrument_key, timeframe);
   const candles = normalizeCandles(rawCandles);
-  if (candles.length < 21) return [];
+  if (candles.length < 21 || !previous) return [];
 
   const dailyHigh = Math.max(...candles.map((c) => c.high));
   if (!(dailyHigh > priceThreshold)) return [];
@@ -65,10 +47,6 @@ export async function scanInstrument(
 
   const volumeMultiple = current.volume / sma20Volume;
   if (!(current.volume > sma20Volume * multiplier)) return [];
-
-  // Only now make the relatively expensive historical request.
-  const previous = await fetchPreviousTradingCandle(instrument.instrument_key, new Date());
-  if (!previous) return [];
 
   const base = {
     symbol: instrument.trading_symbol,
