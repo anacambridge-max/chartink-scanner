@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConfiguredUniverse } from "@/lib/upstox";
+import { getConfiguredUniverse, getPreviousTradingDailyCandles } from "@/lib/upstox";
 import { marketHoursLikelyOpen, scanInstrument, validateScannerInputs } from "@/lib/scanner";
 import type { ScannerMatch } from "@/lib/types";
 
@@ -17,26 +17,37 @@ export async function GET(request: NextRequest) {
     const { timeframe, multiplier, priceThreshold } = validateScannerInputs(request.nextUrl.searchParams);
     const universe = await getConfiguredUniverse();
     if (!universe.length) {
-      return NextResponse.json({ ok: false, error: "No NSE symbols found in instrument master." }, { status: 500 });
+      return NextResponse.json({ ok: false, error: "No NSE F&O stock symbols found in instrument master." }, { status: 500 });
     }
 
-    // Keep each serverless request comfortably below the execution limit. The
-    // browser automatically continues with the next chunk until all NSE stocks
-    // have been scanned.
     const offset = Math.max(0, Number(request.nextUrl.searchParams.get("offset") ?? 0));
     const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 75);
     const limit = Math.max(25, Math.min(75, Number.isFinite(requestedLimit) ? requestedLimit : 75));
     const selected = universe.slice(offset, offset + limit);
 
-    const batchSize = Math.max(1, Math.min(8, Number(process.env.SCAN_BATCH_SIZE ?? 8)));
-    const delayMs = Math.max(0, Number(process.env.SCAN_BATCH_DELAY_MS ?? 50));
+    // Fetch all previous-session High/Low values for this chunk in one OHLC
+    // request. Upstox supports up to 500 instrument keys per OHLC request.
+    const previousByKey = await getPreviousTradingDailyCandles(
+      selected.map((instrument) => instrument.instrument_key),
+    );
+
+    const batchSize = Math.max(1, Math.min(16, Number(process.env.SCAN_BATCH_SIZE ?? 16)));
+    const delayMs = Math.max(0, Number(process.env.SCAN_BATCH_DELAY_MS ?? 0));
     const results: ScannerMatch[] = [];
     let scanned = 0;
 
     for (let i = 0; i < selected.length; i += batchSize) {
       const batch = selected.slice(i, i + batchSize);
       const settled = await Promise.allSettled(
-        batch.map((instrument) => scanInstrument(instrument, timeframe, multiplier, priceThreshold)),
+        batch.map((instrument) =>
+          scanInstrument(
+            instrument,
+            timeframe,
+            multiplier,
+            priceThreshold,
+            previousByKey.get(instrument.instrument_key) ?? null,
+          ),
+        ),
       );
 
       settled.forEach((item, index) => {
