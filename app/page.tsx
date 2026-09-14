@@ -5,6 +5,7 @@ import type { ScanResponse, ScannerMatch, Timeframe } from "@/lib/types";
 
 const refreshOptions = [15000, 30000, 60000] as const;
 const multipliers = [1.5, 2, 3, 4] as const;
+const CHUNK_SIZE = 100;
 
 function formatNumber(value: number, decimals = 2) {
   return new Intl.NumberFormat("en-IN", { maximumFractionDigits: decimals }).format(value);
@@ -27,6 +28,7 @@ export default function Home() {
   const [refreshMs, setRefreshMs] = useState<number>(30000);
   const [data, setData] = useState<ScanResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
@@ -35,13 +37,74 @@ export default function Home() {
     const controller = new AbortController();
     abortRef.current = controller;
     setLoading(true);
+    setProgress(0);
     setError("");
-    const params = new URLSearchParams({ timeframe: String(timeframe), multiplier: String(multiplier), priceThreshold: String(priceThreshold) });
+    setData(null);
+    const started = Date.now();
+    const allResults: ScannerMatch[] = [];
+    let totalUniverse = 0;
+    let scanned = 0;
+    const warnings: string[] = [];
+    let lastCompletedAt = new Date().toISOString();
+
     try {
-      const response = await fetch(`/api/scan?${params.toString()}`, { cache: "no-store", signal: controller.signal });
-      const json = await response.json();
-      if (!response.ok || !json.ok) throw new Error(json.error ?? "Scanner request failed");
-      setData(json);
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const params = new URLSearchParams({
+          timeframe: String(timeframe),
+          multiplier: String(multiplier),
+          priceThreshold: String(priceThreshold),
+          offset: String(offset),
+          limit: String(CHUNK_SIZE),
+        });
+        const response = await fetch(`/api/scan?${params.toString()}`, { cache: "no-store", signal: controller.signal });
+        const json = await response.json() as ScanResponse & { error?: string };
+        if (!response.ok || !json.ok) throw new Error(json.error ?? "Scanner request failed");
+
+        totalUniverse = json.totalUniverse ?? totalUniverse;
+        scanned += json.scanned;
+        allResults.push(...(json.results ?? []));
+        warnings.push(...(json.warnings ?? []));
+        lastCompletedAt = json.completedAt;
+        hasMore = Boolean(json.hasMore);
+        offset += json.limit ?? CHUNK_SIZE;
+        setProgress(totalUniverse ? Math.min(scanned, totalUniverse) : scanned);
+
+        const partial: ScanResponse = {
+          ok: true,
+          scanned,
+          matched: allResults.length,
+          totalUniverse,
+          timeframe,
+          volumeMultiplier: multiplier,
+          priceThreshold,
+          startedAt: new Date(started).toISOString(),
+          completedAt: lastCompletedAt,
+          elapsedMs: Date.now() - started,
+          marketLikelyOpen: json.marketLikelyOpen,
+          warnings: warnings.slice(0, 50),
+          results: [...allResults].sort((a, b) => b.volumeMultiple - a.volumeMultiple),
+        };
+        setData(partial);
+      }
+
+      setData({
+        ok: true,
+        scanned,
+        matched: allResults.length,
+        totalUniverse,
+        timeframe,
+        volumeMultiplier: multiplier,
+        priceThreshold,
+        startedAt: new Date(started).toISOString(),
+        completedAt: lastCompletedAt,
+        elapsedMs: Date.now() - started,
+        marketLikelyOpen: data?.marketLikelyOpen ?? true,
+        warnings: warnings.slice(0, 50),
+        results: allResults.sort((a, b) => b.volumeMultiple - a.volumeMultiple),
+      });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Scanner request failed");
@@ -60,6 +123,7 @@ export default function Home() {
   const grouped = useMemo(() => data?.results ?? [], [data]);
   const bullish = grouped.filter((r) => r.direction === "BULLISH BREAKOUT").length;
   const bearish = grouped.filter((r) => r.direction === "BEARISH BREAKDOWN").length;
+  const progressText = data?.totalUniverse ? `Scanning ${progress}/${data.totalUniverse}` : "Scanning…";
 
   return (
     <main className="min-h-screen bg-[#070b13] px-4 py-5 text-slate-100 md:px-7">
@@ -72,7 +136,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-400">
             <span className={`h-2.5 w-2.5 rounded-full ${loading ? "animate-pulse bg-amber-400" : error ? "bg-red-500" : "bg-emerald-400"}`} />
-            {loading ? "Scanning…" : error ? "Scanner error" : data?.marketLikelyOpen ? "Market hours" : "Outside market hours"}
+            {loading ? progressText : error ? "Scanner error" : data?.marketLikelyOpen ? "Market hours" : "Outside market hours"}
           </div>
         </header>
 
@@ -106,7 +170,7 @@ export default function Home() {
           </div>
 
           <div className="flex items-end">
-            <button onClick={() => void runScan()} disabled={loading} className="w-full rounded-lg bg-slate-700 px-3 py-2.5 text-sm font-semibold hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50">{loading ? "Scanning…" : "Scan Now"}</button>
+            <button onClick={() => void runScan()} disabled={loading} className="w-full rounded-lg bg-slate-700 px-3 py-2.5 text-sm font-semibold hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50">{loading ? progressText : "Scan Now"}</button>
           </div>
         </section>
 
@@ -114,7 +178,7 @@ export default function Home() {
 
         <section className="mb-4 grid gap-3 sm:grid-cols-4">
           {[
-            ["Stocks scanned", data?.scanned ?? "—"],
+            ["Stocks scanned", data?.totalUniverse ? `${data.scanned}/${data.totalUniverse}` : data?.scanned ?? "—"],
             ["Bullish", bullish],
             ["Bearish", bearish],
             ["Scan time", data ? `${(data.elapsedMs / 1000).toFixed(1)}s` : "—"],
@@ -155,7 +219,7 @@ export default function Home() {
 
         <footer className="mt-5 flex flex-col gap-1 text-xs text-slate-600 md:flex-row md:justify-between">
           <span>Data source: Upstox API v3</span>
-          <span>Configured universe: {process.env.NEXT_PUBLIC_UNUSED ?? "NSE equity instrument master"}</span>
+          <span>Configured universe: NSE equity instrument master</span>
         </footer>
       </div>
     </main>
