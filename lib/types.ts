@@ -42,6 +42,10 @@ export interface ScanResponse {
   ok: boolean;
   scanned: number;
   matched: number;
+  totalUniverse?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
   timeframe: Timeframe;
   volumeMultiplier: number;
   priceThreshold: number;
