@@ -31,11 +31,14 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const loadingRef = useRef(false);
 
   const runScan = useCallback(async () => {
+    if (loadingRef.current) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    loadingRef.current = true;
     setLoading(true);
     setProgress(0);
     setError("");
@@ -46,6 +49,7 @@ export default function Home() {
     let scanned = 0;
     const warnings: string[] = [];
     let lastCompletedAt = new Date().toISOString();
+    let marketLikelyOpen = true;
 
     try {
       let offset = 0;
@@ -68,11 +72,12 @@ export default function Home() {
         allResults.push(...(json.results ?? []));
         warnings.push(...(json.warnings ?? []));
         lastCompletedAt = json.completedAt;
+        marketLikelyOpen = json.marketLikelyOpen;
         hasMore = Boolean(json.hasMore);
         offset += json.limit ?? CHUNK_SIZE;
         setProgress(totalUniverse ? Math.min(scanned, totalUniverse) : scanned);
 
-        const partial: ScanResponse = {
+        setData({
           ok: true,
           scanned,
           matched: allResults.length,
@@ -83,39 +88,29 @@ export default function Home() {
           startedAt: new Date(started).toISOString(),
           completedAt: lastCompletedAt,
           elapsedMs: Date.now() - started,
-          marketLikelyOpen: json.marketLikelyOpen,
+          marketLikelyOpen,
           warnings: warnings.slice(0, 50),
           results: [...allResults].sort((a, b) => b.volumeMultiple - a.volumeMultiple),
-        };
-        setData(partial);
+        });
       }
-
-      setData({
-        ok: true,
-        scanned,
-        matched: allResults.length,
-        totalUniverse,
-        timeframe,
-        volumeMultiplier: multiplier,
-        priceThreshold,
-        startedAt: new Date(started).toISOString(),
-        completedAt: lastCompletedAt,
-        elapsedMs: Date.now() - started,
-        marketLikelyOpen: data?.marketLikelyOpen ?? true,
-        warnings: warnings.slice(0, 50),
-        results: allResults.sort((a, b) => b.volumeMultiple - a.volumeMultiple),
-      });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Scanner request failed");
     } finally {
-      if (!controller.signal.aborted) setLoading(false);
+      if (!controller.signal.aborted) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   }, [timeframe, multiplier, priceThreshold]);
 
   useEffect(() => { void runScan(); }, [runScan]);
   useEffect(() => {
-    const id = window.setInterval(() => void runScan(), refreshMs);
+    const id = window.setInterval(() => {
+      // Never abort a full-universe scan just because the refresh timer fired.
+      // Start the next refresh only after the current scan has finished.
+      if (!loadingRef.current) void runScan();
+    }, refreshMs);
     return () => window.clearInterval(id);
   }, [runScan, refreshMs]);
   useEffect(() => () => abortRef.current?.abort(), []);
