@@ -20,6 +20,31 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ ok: false, error: "No NSE F&O stock symbols found in instrument master." }, { status: 500 });
     }
 
+    // The scanner is for live NSE equity/F&O conditions. Do not spend Upstox
+    // API calls outside the regular NSE continuous trading session.
+    const marketOpen = marketHoursLikelyOpen();
+    if (!marketOpen) {
+      const completed = Date.now();
+      return NextResponse.json({
+        ok: true,
+        scanned: 0,
+        matched: 0,
+        totalUniverse: universe.length,
+        offset: 0,
+        limit: 0,
+        hasMore: false,
+        timeframe,
+        volumeMultiplier: multiplier,
+        priceThreshold,
+        startedAt: new Date(started).toISOString(),
+        completedAt: new Date(completed).toISOString(),
+        elapsedMs: completed - started,
+        marketLikelyOpen: false,
+        warnings: [],
+        results: [],
+      }, { headers: { "Cache-Control": "no-store" } });
+    }
+
     const offset = Math.max(0, Number(request.nextUrl.searchParams.get("offset") ?? 0));
     const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 75);
     const limit = Math.max(25, Math.min(75, Number.isFinite(requestedLimit) ? requestedLimit : 75));
@@ -75,7 +100,7 @@ export async function GET(request: NextRequest) {
       startedAt: new Date(started).toISOString(),
       completedAt: new Date(completed).toISOString(),
       elapsedMs: completed - started,
-      marketLikelyOpen: marketHoursLikelyOpen(),
+      marketLikelyOpen: marketOpen,
       warnings: warnings.slice(0, 50),
       results,
     }, { headers: { "Cache-Control": "no-store" } });
